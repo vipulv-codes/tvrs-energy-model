@@ -15,11 +15,23 @@ def main():
         print(f"Downloaded {len(prices)} days of NG=F prices.")
         
         # Uncomment the following to run the full calibration (can be slow due to Genetic Algorithm)
-        # delta = 0.0455 # Granularity from paper
-        # T_minus_t = 1.0 # 1 year to maturity approx
-        # em = EMCalibration(prices[:500].flatten(), delta, T_minus_t) # run on a subset for speed
+        # delta = 0.0455  # Granularity from paper (~1/22 trading days per month)
+        #
+        # Option A — Scalar T_minus_t (acceptable for rolling front-month NG=F,
+        # where time-to-maturity is roughly constant at ~1 month = 1/12 year):
+        # T_minus_t = 1.0 / 12
+        # em = EMCalibration(prices[:500], delta, T_minus_t)
+        #
+        # Option B — Array T_minus_t (strict paper implementation; use when you
+        # have the exact maturity date of each contract in the dataset):
+        # n_obs = 500
+        # T_contract = 2.0  # e.g. 2-year contract
+        # t_obs = np.arange(n_obs) * delta
+        # T_minus_t_array = T_contract - t_obs  # tau decreases with each observation
+        # em = EMCalibration(prices[:n_obs], delta, T_minus_t_array)
+        #
         # params, p_trans, smooth_prob = em.fit(max_iter=3)
-        # print("Calibration complete. (Skipped full run for performance)")
+        # print("Calibration complete.")
         print("Data fetched successfully. Using parameters from Table 1 for pricing.")
     except Exception as e:
         print(f"Could not download data: {e}")

@@ -9,11 +9,24 @@ class EMCalibration:
         """
         data: array of prices F_t
         delta: time step size
-        T_minus_t: time to maturity (scalar or array)
+        T_minus_t: time to maturity, either:
+            - scalar: treated as constant tau for all observations (e.g. rolling
+              front-month where maturity lag is approximately fixed)
+            - 1-D array of length len(data): tau_j = T - t_j for each observation,
+              which correctly captures the paper's time-varying sigma(t, T, X_t)
         """
         self.F = data
         self.delta = delta
-        self.T_minus_t = T_minus_t
+        # Normalise to a per-observation array so downstream code is uniform
+        if np.isscalar(T_minus_t):
+            self.T_minus_t = np.full(len(data), T_minus_t)
+        else:
+            self.T_minus_t = np.asarray(T_minus_t, dtype=float)
+            if len(self.T_minus_t) != len(data):
+                raise ValueError(
+                    f"T_minus_t array length ({len(self.T_minus_t)}) must match "
+                    f"data length ({len(data)})"
+                )
         self.n = len(data) - 1
 
     def _sigma(self, kappa, xi, tau):
@@ -44,13 +57,16 @@ class EMCalibration:
         
         predict_prob = np.zeros((self.n + 1, 2))
         
-        sigma1 = self._sigma(kappa, xi1, self.T_minus_t)
-        sigma2 = self._sigma(kappa, xi2, self.T_minus_t)
-        
         for j in range(1, self.n + 1):
             # Predict
             predict_prob[j, 0] = filter_prob[j-1, 0] * p_trans[0, 0] + filter_prob[j-1, 1] * p_trans[1, 0]
             predict_prob[j, 1] = filter_prob[j-1, 0] * p_trans[0, 1] + filter_prob[j-1, 1] * p_trans[1, 1]
+            
+            # sigma is evaluated at the current observation time t_j using tau_j = T - t_j
+            # This gives the paper's time-varying sigma(t_j, T, X_{t_j})
+            tau_j = self.T_minus_t[j]
+            sigma1 = self._sigma(kappa, xi1, tau_j)
+            sigma2 = self._sigma(kappa, xi2, tau_j)
             
             # Update (filtering)
             G1 = self._G(self.F[j], self.F[j-1], sigma1)
@@ -87,11 +103,14 @@ class EMCalibration:
         params: (kappa, xi1, xi2)
         """
         kappa, xi1, xi2 = params
-        sigma1 = self._sigma(kappa, xi1, self.T_minus_t)
-        sigma2 = self._sigma(kappa, xi2, self.T_minus_t)
         
         log_like = 0
         for j in range(1, self.n + 1):
+            # Use per-observation tau to keep sigma time-varying, matching e_step
+            tau_j = self.T_minus_t[j]
+            sigma1 = self._sigma(kappa, xi1, tau_j)
+            sigma2 = self._sigma(kappa, xi2, tau_j)
+            
             G1 = self._G(self.F[j], self.F[j-1], sigma1)
             G2 = self._G(self.F[j], self.F[j-1], sigma2)
             
@@ -157,5 +176,7 @@ def download_data():
     print("Downloading US Natural Gas Futures (NG=F) from Yahoo Finance...")
     # Jan 2017 to Jan 2023
     ng_data = yf.download("NG=F", start="2017-01-01", end="2023-01-01")
-    prices = ng_data['Close'].values
+    # Drop NaN rows that yfinance can return for holidays / missing feed data;
+    # passing NaNs into the EM filter produces NaN densities that break optimization.
+    prices = ng_data['Close'].dropna().values
     return prices
