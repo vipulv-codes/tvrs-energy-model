@@ -3,7 +3,7 @@ import scipy.integrate as integrate
 import scipy.linalg as linalg
 
 class TVRSModel:
-    def __init__(self, kappa, xi1, xi2, lambda1, lambda2, r1, r2, alpha_damp=1.5):
+    def __init__(self, kappa, xi1, xi2, lambda1, lambda2, r1, r2, alpha_damp=1.5, integration_limit=100.0):
         self.kappa = kappa
         self.xi1 = xi1
         self.xi2 = xi2
@@ -12,6 +12,7 @@ class TVRSModel:
         self.r1 = r1
         self.r2 = r2
         self.alpha_damp = alpha_damp
+        self.integration_limit = integration_limit
 
     def _V(self, t, T, xi):
         """Computes the integral of sigma^2(s) from t to T."""
@@ -71,8 +72,8 @@ class TVRSModel:
             psi_val = self.psi(v, t, T, x)
             return np.real(np.exp(-1j * v * k) * psi_val)
             
-        # Integrate from 0 to infinity
-        integral_val, _ = integrate.quad(integrand, 0, 100, limit=200) # 100 is usually enough for convergence
+        # Integrate from 0 to infinity using the tunable limit
+        integral_val, _ = integrate.quad(integrand, 0, self.integration_limit, limit=200)
         
         price = (f * np.exp(-self.alpha_damp * k) / np.pi) * integral_val
         return price

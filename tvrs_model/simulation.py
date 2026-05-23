@@ -1,7 +1,7 @@
 import numpy as np
 
 class TVRSSimulation:
-    def __init__(self, kappa, xi1, xi2, lambda1, lambda2, r1, r2):
+    def __init__(self, kappa, xi1, xi2, lambda1, lambda2, r1, r2, use_log_euler=False):
         self.kappa = kappa
         self.xi1 = xi1
         self.xi2 = xi2
@@ -9,6 +9,7 @@ class TVRSSimulation:
         self.lambda2 = lambda2
         self.r1 = r1
         self.r2 = r2
+        self.use_log_euler = use_log_euler
 
     def _sigma(self, t, T, xi):
         """Volatility function"""
@@ -45,32 +46,34 @@ class TVRSSimulation:
             states = np.zeros(n)
             
             # Draw holding times
-            regime_times = []
-            regime_states = []
+            regime_times = [0.0]
+            regime_states = [state]
             
             while t_current < T:
                 lam = self.lambda1 if state == 1 else self.lambda2
                 hold_time = np.random.exponential(1 / lam) if lam > 0 else T
                 
                 t_next = min(t_current + hold_time, T)
-                regime_times.append((t_current, t_next))
-                regime_states.append(state)
+                regime_times.append(t_next)
                 
                 t_current = t_next
                 state = 2 if state == 1 else 1
+                if t_current < T:
+                    regime_states.append(state)
             
             # Map continuous time regimes to discrete grid
-            r_path = np.zeros(n)
-            xi_path = np.zeros(n)
+            t_mids = t_grid[:-1] + delta / 2
             
-            for i in range(n):
-                t_mid = t_grid[i] + delta / 2
-                # find which regime t_mid falls into
-                for (start, end), s in zip(regime_times, regime_states):
-                    if start <= t_mid <= end:
-                        r_path[i] = self.r1 if s == 1 else self.r2
-                        xi_path[i] = self.xi1 if s == 1 else self.xi2
-                        break
+            # np.searchsorted gives the index of the interval
+            indices = np.searchsorted(regime_times, t_mids, side='right') - 1
+            
+            # Bound indices to max length of regime_states just in case of float precision issues
+            indices = np.clip(indices, 0, len(regime_states) - 1)
+            
+            states_mapped = np.array(regime_states)[indices]
+            
+            r_path = np.where(states_mapped == 1, self.r1, self.r2)
+            xi_path = np.where(states_mapped == 1, self.xi1, self.xi2)
             
             # Simulate F path
             for i in range(n):
@@ -85,8 +88,12 @@ class TVRSSimulation:
                 Z_mean = np.mean(Z)
                 y = np.sqrt(d / (d - 1)) * (Z - Z_mean) if d > 1 else np.random.randn(1)
                 
-                # Log-Euler step (to avoid negative prices)
-                F[p, :] = F[p, :] * np.exp(-0.5 * sigma_i**2 * delta + sigma_i * np.sqrt(delta) * y)
+                if self.use_log_euler:
+                    # Log-Euler step (to avoid negative prices)
+                    F[p, :] = F[p, :] * np.exp(-0.5 * sigma_i**2 * delta + sigma_i * np.sqrt(delta) * y)
+                else:
+                    # Standard Euler-Maruyama (exact match to paper Algorithm 3)
+                    F[p, :] = F[p, :] + sigma_i * F[p, :] * np.sqrt(delta) * y
                 
                 # Update discount factor
                 discount_factor[p, :] *= np.exp(-r_i * delta)
