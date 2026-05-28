@@ -80,21 +80,33 @@ class TVRSModel:
 
     def hedging_strategy(self, f, K, t, T, x):
         """
-        Computes the delta and money market positions for hedging.
-        Returns (gamma_t, beta_t)
+        Computes the delta and money market positions for hedging a futures option.
+
+        Unlike stock options, a futures contract costs ZERO to enter — only price
+        changes dF_t generate P&L. The self-financing condition is therefore:
+            dV_t = gamma_t * dF_t + r * beta_t * dt
+        with portfolio value V_t = beta_t (money market only).
+
+        To replicate the option at time t:
+            - Hold gamma_t futures contracts  (zero cost to enter)
+            - Invest beta_t = U(f, x, t) in the money market  (entire option value)
+
+        NOTE: beta_t = U, NOT U - gamma_t * f. The subtraction of gamma_t * f
+        is the stock convention (where you pay f upfront), which is incorrect here.
+
+        Returns:
+            gamma_t : number of futures contracts to hold (Delta)
+            beta_t  : amount to invest in the money market (= option price)
         """
         eps = f * 1e-4
-        
-        # Finite difference for Delta (gamma_t)
+
+        # Finite difference for Delta (gamma_t) — unchanged by futures convention
         U_up = self.price_european_call(f + eps, K, t, T, x)
         U_down = self.price_european_call(f - eps, K, t, T, x)
-        
+
         gamma_t = (U_up - U_down) / (2 * eps)
-        
-        # Option price
-        U = self.price_european_call(f, K, t, T, x)
-        
-        # Beta_t calculation: beta_t = U - gamma_t * f
-        beta_t = U - gamma_t * f
-        
+
+        # Option price = money market position (futures convention: no upfront cost)
+        beta_t = self.price_european_call(f, K, t, T, x)
+
         return gamma_t, beta_t
