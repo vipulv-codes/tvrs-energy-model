@@ -29,12 +29,13 @@ class TVRSModel:
         val, _ = integrate.quad(integrand, t, T)
         return val
 
-    def psi(self, v, t, T, x):
-        """Computes the psi function for the Fourier transform."""
-        z = v - 1j * (self.alpha_damp + 1)
+    def psi(self, v, t, T, x, V1, V2):
+        """Computes the psi function for the Fourier transform.
         
-        V1 = self._V(t, T, self.xi1)
-        V2 = self._V(t, T, self.xi2)
+        V1, V2 are pre-computed integrated variances (from _V), passed in
+        to avoid redundant numerical integration at every quad evaluation point.
+        """
+        z = v - 1j * (self.alpha_damp + 1)
         
         tau = T - t
         G1 = -self.r1 * tau - 0.5 * (1j * z + z**2) * V1
@@ -68,8 +69,14 @@ class TVRSModel:
             
         k = np.log(K / f)
         
+        # Pre-compute integrated variances ONCE — they depend on (t, T, xi),
+        # NOT on the Fourier variable v, so hoisting them here avoids ~500
+        # redundant numerical integrations per option price.
+        V1 = self._V(t, T, self.xi1)
+        V2 = self._V(t, T, self.xi2)
+        
         def integrand(v):
-            psi_val = self.psi(v, t, T, x)
+            psi_val = self.psi(v, t, T, x, V1, V2)
             return np.real(np.exp(-1j * v * k) * psi_val)
             
         # Integrate from 0 to infinity using the tunable limit
