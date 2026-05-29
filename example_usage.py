@@ -1,7 +1,7 @@
 import numpy as np
 from tvrs_model.pricing import TVRSModel
 from tvrs_model.simulation import TVRSSimulation
-from tvrs_model.calibration import EMCalibration, download_data
+from tvrs_model.calibration import EMCalibration, extract_intensities, download_data
 
 def main():
     print("=== TVRS Model for Energy Futures ===")
@@ -30,8 +30,14 @@ def main():
         # T_minus_t_array = T_contract - t_obs  # tau decreases with each observation
         # em = EMCalibration(prices[:n_obs], delta, T_minus_t_array)
         #
-        # params, p_trans, smooth_prob = em.fit(max_iter=3)
-        # print("Calibration complete.")
+        # params, p_trans, smooth_prob = em.fit(max_iter=20)
+        # kappa_cal, xi1_cal, xi2_cal = params
+        #
+        # Convert discrete transition matrix to continuous intensities for pricing:
+        # lambda1_cal, lambda2_cal, Pi = extract_intensities(p_trans, delta)
+        # print(f"Calibrated: kappa={kappa_cal:.4f}, xi1={xi1_cal:.4f}, xi2={xi2_cal:.4f}")
+        # print(f"Extracted:  lambda1={lambda1_cal:.4f}, lambda2={lambda2_cal:.4f}")
+        
         print("Data fetched successfully. Using parameters from Table 1 for pricing.")
     except Exception as e:
         print(f"Could not download data: {e}")
@@ -64,13 +70,16 @@ def main():
     price_gave = sim_model.price_european_call(f, K, T, n=100, d=16, m=1000, initial_state=1)
     print(f"GAVE Simulation Price (Algorithm 3): {price_gave:.4f}")
     
-    error = abs(price_analytical - price_gave) / price_gave if price_gave > 0 else 0
-    print(f"Absolute Error: {error:.2%}")
+    abs_error = abs(price_analytical - price_gave)
+    rel_error = abs_error / price_gave if price_gave > 0 else 0
+    print(f"Absolute Error: {abs_error:.4f}")
+    print(f"Relative Error: {rel_error:.2%}")
     
     print("\n[4] Calculating Hedging Strategy")
     gamma_t, beta_t = pricing_model.hedging_strategy(f, K, t, T, initial_state)
     print(f"Number of futures held (gamma_t): {gamma_t:.4f}")
-    print(f"Money market position (beta_t): {beta_t:.4f}")
+    print(f"Money market position (beta_t):   {beta_t:.4f}")
+    print(f"(Note: beta_t = option price for futures; see Theorem 3.2)")
     
     print("\nDone.")
 
