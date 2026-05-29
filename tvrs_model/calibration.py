@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 from scipy.optimize import differential_evolution
+from scipy.linalg import logm
 import yfinance as yf
 from scipy.stats import norm
 
@@ -30,9 +31,9 @@ class EMCalibration:
         self.n = len(data) - 1
 
     def _sigma(self, kappa, xi, tau):
-        if kappa == 0:
+        # Guard: as tau -> 0, L'Hôpital gives lim sigma = xi
+        if kappa == 0 or tau < 1e-10:
             return xi
-        # Handling the case where tau is an array or scalar
         return xi * np.sqrt((1 - np.exp(-2 * kappa * tau)) / (2 * kappa * tau))
 
     def _G(self, F_curr, F_prev, sigma):
@@ -43,17 +44,26 @@ class EMCalibration:
         std = np.maximum(std, 1e-8)
         return norm.pdf(F_curr, loc=F_prev, scale=std)
 
-    def e_step(self, params, p_trans):
+    def e_step(self, params, p_trans, init_prob=None):
         """
+        Forward-backward algorithm (E-step of Baum-Welch).
+
         params: (kappa, xi1, xi2)
         p_trans: 2x2 transition matrix P(X_t = j | X_{t-1} = i)
+        init_prob: initial state distribution π_0. If None, uses uniform [0.5, 0.5].
+            In the full Baum-Welch algorithm, this is updated each EM iteration
+            using the smoothed probability at t=0 from the previous iteration:
+                π^(m+1) = smooth_prob[0, :]
         """
         kappa, xi1, xi2 = params
         
         # Filtering
         # filter_prob[j, k] = P(X_{t_j} = e_k | F_{t_0}, ..., F_{t_j})
         filter_prob = np.zeros((self.n + 1, 2))
-        filter_prob[0, :] = [0.5, 0.5] # initial guess
+        if init_prob is not None:
+            filter_prob[0, :] = init_prob
+        else:
+            filter_prob[0, :] = [0.5, 0.5]
         
         predict_prob = np.zeros((self.n + 1, 2))
         
@@ -125,24 +135,22 @@ class EMCalibration:
         # Initial guess from Table 1
         params = [0.0054, 1.1275, 0.8700] # kappa, xi1, xi2
         p_trans = np.array([[0.9236, 0.0764], [0.4131, 0.5869]])
+        init_prob = np.array([0.5, 0.5])  # Baum-Welch: updated each iteration
         
         bounds = [(0.0001, 1.0), (0.1, 5.0), (0.1, 5.0)] # Bounds for kappa, xi1, xi2
         
         for iteration in range(max_iter):
             print(f"EM Iteration {iteration+1}/{max_iter}")
             
-            # E-Step
-            filter_prob, smooth_prob = self.e_step(params, p_trans)
+            # E-Step: pass init_prob (updated from previous iteration's smoother)
+            filter_prob, smooth_prob = self.e_step(params, p_trans, init_prob)
             
-            # Update transition probabilities
-            # p_ki = sum_{j=1}^{n-1} P(X_{t_{j+1}} = i | F) * P(X_{t_j} = k | F) ... simplified estimation
-            # A common estimation for transition matrix using smooth probs:
+            # Update transition probabilities (Baum-Welch ξ)
             p_trans_new = np.zeros((2, 2))
             for k in range(2):
                 denom = np.sum(smooth_prob[:-1, k])
                 if denom > 0:
                     for i in range(2):
-                        # Approximate joint probability P(X_t=k, X_{t+1}=i | F)
                         num = 0
                         for j in range(self.n):
                             predict_prob_ji = filter_prob[j, 0] * p_trans[0, i] + filter_prob[j, 1] * p_trans[1, i]
@@ -156,8 +164,15 @@ class EMCalibration:
             p_trans = p_trans_new
             p_trans = p_trans / p_trans.sum(axis=1, keepdims=True) # Normalize
             
-            # M-Step
-            res = differential_evolution(self.m_step_obj, bounds, args=(smooth_prob,), strategy='best1bin', maxiter=20)
+            # Update initial state distribution: π^(m+1) = smooth_prob[0, :]
+            # (standard Baum-Welch update for the initial distribution parameter)
+            init_prob = smooth_prob[0, :].copy()
+            
+            # M-Step (maxiter=100 for reliable convergence; tol=1e-6 for precision)
+            res = differential_evolution(
+                self.m_step_obj, bounds, args=(smooth_prob,),
+                strategy='best1bin', maxiter=100, tol=1e-6
+            )
             new_params = res.x
             
             # Check convergence
@@ -170,6 +185,42 @@ class EMCalibration:
                 break
                 
         return params, p_trans, smooth_prob
+
+
+def extract_intensities(p_trans, delta):
+    """
+    Convert a discrete transition matrix P to continuous-time intensities (λ₁, λ₂)
+    using the matrix logarithm: Π = log(P) / δ.
+
+    The pricing engine (TVRSModel) requires continuous rates λ₁, λ₂, while the
+    EM calibration produces discrete per-step transition probabilities P.
+    This function bridges the two.
+
+    Args:
+        p_trans: 2×2 row-stochastic transition matrix from EM calibration
+        delta: time step size (same δ used in calibration)
+
+    Returns:
+        lambda1: continuous exit rate from Regime 1
+        lambda2: continuous exit rate from Regime 2
+        Pi: 2×2 generator matrix
+
+    Raises:
+        ValueError: if the resulting generator has wrong sign structure
+    """
+    Pi = logm(p_trans).real / delta  # .real guards against tiny imaginary residuals
+
+    lambda1 = -Pi[0, 0]
+    lambda2 = -Pi[1, 1]
+
+    # Sanity checks: generator diagonal must be negative, off-diagonal positive
+    if lambda1 < 0 or lambda2 < 0:
+        raise ValueError(
+            f"Invalid generator: λ₁={lambda1:.4f}, λ₂={lambda2:.4f}. "
+            f"Transition matrix may not be embeddable in continuous time."
+        )
+
+    return lambda1, lambda2, Pi
 
 def download_data():
     """Download US Natural Gas Futures data."""
