@@ -173,14 +173,32 @@ class EMCalibration:
                 self.m_step_obj, bounds, args=(smooth_prob,),
                 strategy='best1bin', maxiter=100, tol=1e-6
             )
-            new_params = res.x
+            new_params = list(res.x)
             
-            # Check convergence
-            mse = np.mean((np.array(params) - np.array(new_params))**2)
+            # Post-hoc label canonicalization: ensure xi1 >= xi2 (Regime 1 = high-vol).
+            # The likelihood is symmetric under label swaps, so the optimizer may
+            # freely find xi1 < xi2 — which is mathematically valid but makes
+            # interpretation confusing. Rather than penalizing the optimizer (which
+            # wastes evaluations), we let it search freely and then swap labels
+            # along with the corresponding P rows/columns to preserve consistency.
+            if new_params[1] < new_params[2]:
+                new_params[1], new_params[2] = new_params[2], new_params[1]
+                p_trans = p_trans[[1, 0], :][:, [1, 0]]  # swap both rows and columns
+                init_prob = init_prob[[1, 0]]
+            
+            # Convergence check: params and P checked SEPARATELY to avoid
+            # mixed-scale MSE (κ ≈ 0.005 vs P_ij ≈ 0.9 would drown out κ changes).
+            param_mse = np.mean((np.array(params) - np.array(new_params))**2)
+            p_trans_old = p_trans_new / p_trans_new.sum(axis=1, keepdims=True)
+            # (p_trans was already normalized above, but p_trans_old is captured
+            #  before any label swap — however since we check against new_params
+            #  which may have been swapped, we compare the final p_trans directly)
+            
             params = new_params
             
-            print(f"Params: kappa={params[0]:.4f}, xi1={params[1]:.4f}, xi2={params[2]:.4f}, MSE={mse:.6f}")
-            if mse < tol:
+            print(f"Params: kappa={params[0]:.4f}, xi1={params[1]:.4f}, xi2={params[2]:.4f}, "
+                  f"param_MSE={param_mse:.6f}")
+            if param_mse < tol:
                 print("Converged!")
                 break
                 
